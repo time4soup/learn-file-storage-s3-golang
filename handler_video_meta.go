@@ -82,6 +82,7 @@ func (cfg *apiConfig) handlerVideoMetaDelete(w http.ResponseWriter, r *http.Requ
 }
 
 func (cfg *apiConfig) handlerVideoGet(w http.ResponseWriter, r *http.Request) {
+
 	videoIDString := r.PathValue("videoID")
 	videoID, err := uuid.Parse(videoIDString)
 	if err != nil {

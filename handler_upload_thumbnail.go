@@ -1,8 +1,10 @@
 package main
 
 import (
-	"fmt"
+	"io"
+	"mime"
 	"net/http"
+	"os"
 
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
 	"github.com/google/uuid"
@@ -28,10 +30,69 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	const maxMemory = 10 << 20
+	err = r.ParseMultipartForm(int64(maxMemory))
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't parse form", err)
+		return
+	}
+	file, fileHeader, err := r.FormFile("thumbnail")
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Couldn't read thumbnail file", err)
+		return
+	}
+	defer file.Close()
 
-	fmt.Println("uploading thumbnail for video", videoID, "by user", userID)
+	contentType := fileHeader.Header.Get("Content-Type")
+	if contentType == "" {
+		respondWithError(w, http.StatusBadRequest, "thumbnail header missing 'Content-Type' field", nil)
+		return
+	}
 
-	// TODO: implement the upload here
+	video, err := cfg.db.GetVideo(videoID)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't find video", err)
+		return
+	}
+	if video.UserID != userID {
+		respondWithError(w, http.StatusUnauthorized, "Can't edit a video you don't own", nil)
+		return
+	}
 
-	respondWithJSON(w, http.StatusOK, struct{}{})
+	mediaType, _, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't to parse media type", err)
+		return
+	}
+	if mediaType != "image/jpeg" && mediaType != "image/png" {
+		respondWithError(w, http.StatusUnsupportedMediaType, "Unsupported image type", nil)
+		return
+	}
+
+	fileExtension := parseFileExtension(mediaType)
+	fileName := makeRandomFileName()
+	filePath := cfg.getFilePath(fileName, fileExtension)
+
+	localFile, err := os.Create(filePath)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "error creating file for thumbnail", err)
+		return
+	}
+	defer localFile.Close()
+
+	_, err = io.Copy(localFile, file)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't copy thumbnail data to local file", err)
+		return
+	}
+
+	url := cfg.getVideoURL(fileName, fileExtension)
+	video.ThumbnailURL = &url
+	err = cfg.db.UpdateVideo(video)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Can't update video URL", err)
+		return
+	}
+
+	respondWithJSON(w, http.StatusOK, video)
 }
